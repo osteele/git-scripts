@@ -6,6 +6,7 @@
     - [`git-apply-fixups`](#git-apply-fixups)
   - [AI-Assisted Git Tools](#ai-assisted-git-tools)
     - [`git-ai-commit`](#git-ai-commit)
+    - [`git-squash-commit-messages`](#git-squash-commit-messages)
 
 This repository contains various utility scripts, primarily in Bash and Python, to assist with git.
 
@@ -58,4 +59,18 @@ Generates commit messages based on changes using AI assistance. Designed to stre
 
 ```bash
 git-ai-commit # Analyzes current changes and suggests commit message
+```
+
+#### `git-squash-commit-messages`
+Uses an AI language model to combine multiple git commit messages into a single, comprehensive message. Useful when squashing commits or preparing pull request descriptions.
+
+```bash
+# Combine the last 3 commit messages
+git-squash-commit-messages HEAD~3..HEAD
+
+# Combine messages between specific commits
+git-squash-commit-messages abc123..def456
+
+# Use a specific model
+git-squash-commit-messages -m gpt-4 HEAD~3..HEAD
 ```
