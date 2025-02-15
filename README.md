@@ -76,7 +76,10 @@ git-ai-rewrite-commit <commit-hash>
 git-ai-rewrite-commit -n
 
 # Use a specific LLM model
-git-ai-rewrite-commit --model gpt-4
+git-ai-reword-message --model gpt-4
+
+# Modify the message according to specific instructions
+git-ai-reword-message --prompt "Make the message more concise"
 ```
 
 #### `git-squash-commit-messages`
