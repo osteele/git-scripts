@@ -101,6 +101,30 @@ llm aliases
 llm aliases remove ai-commit-message
 ```
 
+#### Customizing AI Instructions
+
+You can provide additional instructions to guide the AI's commit message generation using instruction files. Instructions from multiple sources are combined:
+
+1. **Global instructions** (`~/.config/ai-commit-instructions`) - applies to all repositories
+2. **Per-project instructions** (`.ai-commit-instructions` in repo root) - applies only to the current project
+3. **Command-line prompt** (`--prompt` option) - applies to a single invocation
+
+**Example global instructions** (`~/.config/ai-commit-instructions`):
+```
+Use conventional commit format.
+Keep commit titles under 50 characters.
+Use imperative mood in the commit title.
+```
+
+**Example project-specific instructions** (`.ai-commit-instructions`):
+```
+Don't mention "Slepian-Wolf" in commit messages since it's implied by the project context.
+Focus on what changed, not the project domain.
+Emphasize performance implications of algorithmic changes.
+```
+
+The `.ai-commit-instructions` file can be version-controlled and shared with your team to ensure consistent commit message style across all contributors.
+
 ### `git-ai-commit`
 Automatically generates and commits changes using AI-generated commit messages. Commits both staged and unstaged changes to tracked files (like `git commit -a`), and by default also stages and commits untracked files.
 
