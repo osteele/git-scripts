@@ -226,7 +226,13 @@ Don't include any other text in the response, just the commit message."
     # Pass prompt as argument, which may still be large but less likely to hit ARG_MAX
     # than including the diff in the argument
     local commit_msg
+    local llm_exit_code
     commit_msg=$(echo "$prompt_text" | llm --model "$model")
+    llm_exit_code=$?
+    if [[ $llm_exit_code -ne 0 ]]; then
+        echo "$commit_msg" >&2
+        return 1
+    fi
 
     # Strip markdown code fences if present
     if [[ "$commit_msg" =~ ^\`\`\`.* ]] && [[ "$commit_msg" =~ \`\`\`$ ]]; then
