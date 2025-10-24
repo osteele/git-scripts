@@ -89,10 +89,14 @@ These AI-powered tools use the `llm` command-line tool to generate and modify co
 
 ```bash
 # Set a preferred model for commit messages
-llm aliases set ai-commit-message "openrouter/google/gemini-2.5-flash-lite"
+llm aliases set ai-commit-message gemini-2.5-flash-lite
 # Or use any other available model
-llm aliases set ai-commit-message "claude-3.5-sonnet"
-llm aliases set ai-commit-message "gpt-4"
+llm aliases set ai-commit-message claude-haiku-4.5
+llm aliases set ai-commit-message claude-sonnet-4.5
+llm aliases set ai-commit-message gpt-4o
+
+# List available models to find model IDs
+llm models list
 
 # Check your current aliases
 llm aliases

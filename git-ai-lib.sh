@@ -149,7 +149,30 @@ $custom_prompt
 
 Format the response as a conventional commit message with a brief title line followed by a more detailed description if needed.
 Do not include a summary paragraph after any list of changes.
-Do not use Markdown emphasis such as **bold**, *italics*, or similar styling.
+
+FORMATTING RULES:
+- Commit messages are viewed as plain text, not rendered markdown
+- Use backticks for \`code\`, \`filenames\`, and \`identifiers\`
+- Do NOT use **bold** or *italic* markdown
+- Write bullet lists as plain text with simple dashes (-)
+- Keep formatting minimal and readable as plain text
+
+GOOD EXAMPLE:
+feat: Add gradient compression pipeline
+
+- Implement bucket-based quantization codec
+- Add compression ratio calculation in \`metrics.py\`
+- Support 8-bit and 16-bit quantization modes
+- Update documentation with usage examples
+
+AVOID (too much markdown):
+feat: Add gradient compression pipeline
+
+- **Implement** bucket-based quantization codec
+- Add compression ratio calculation in **metrics.py**
+- Support **8-bit** and **16-bit** quantization modes
+- Update **documentation** with usage examples
+
 Don't include any other text in the response, just the commit message."
     else
         prompt_text="Analyze these changes and create a conventional commit message:
@@ -171,8 +194,31 @@ $current_desc
 
 Format the response as a conventional commit message with a brief title line followed by a more detailed description if needed.
 Do not include a summary paragraph after any list of changes.
-Do not use Markdown emphasis such as **bold**, *italics*, or similar styling.
 Follow the conventional commit format (e.g., feat:, fix:, docs:, chore:, refactor:, test:, style:).
+
+FORMATTING RULES:
+- Commit messages are viewed as plain text, not rendered markdown
+- Use backticks for \`code\`, \`filenames\`, and \`identifiers\`
+- Do NOT use **bold** or *italic* markdown
+- Write bullet lists as plain text with simple dashes (-)
+- Keep formatting minimal and readable as plain text
+
+GOOD EXAMPLE:
+feat: Add gradient compression pipeline
+
+- Implement bucket-based quantization codec
+- Add compression ratio calculation in \`metrics.py\`
+- Support 8-bit and 16-bit quantization modes
+- Update documentation with usage examples
+
+AVOID (too much markdown):
+feat: Add gradient compression pipeline
+
+- **Implement** bucket-based quantization codec
+- Add compression ratio calculation in **metrics.py**
+- Support **8-bit** and **16-bit** quantization modes
+- Update **documentation** with usage examples
+
 Don't include any other text in the response, just the commit message."
     fi
 
