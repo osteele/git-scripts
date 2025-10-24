@@ -18,9 +18,10 @@ from pathlib import Path
 from typing import Iterator, Optional
 
 import click
-import git
 from rich.console import Console
 from rich.theme import Theme
+
+import git
 
 custom_theme = Theme({
     "fixup": "yellow",
@@ -157,7 +158,7 @@ def main(dry_run: bool, squash: bool, max_count: Optional[int], since: Optional[
     This script is part of a workflow with git-create-fixups:
 
     1. Make changes to multiple files
-    2. Run git-stage-fixups to create separate commits for each file
+    2. Run git-create-fixups to create separate commits for each file
     3. Run this script (git-apply-fixups) to automatically reorder the commits
        so that each fixup commit is placed before its target commit
 

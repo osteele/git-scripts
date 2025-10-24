@@ -1,6 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
+# Source shared library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/git-ai-lib.sh"
+
 # Check for llm installation
 if ! command -v llm >/dev/null 2>&1; then
     echo "Error: llm command not found. Install from https://llm.datasette.io/en/stable/setup.html" >&2
@@ -12,12 +16,14 @@ usage() {
 Usage: $(basename "$0") [options]
 
 Generate and commit changes using AI messages.
+Commits both staged and unstaged changes to tracked files (like git commit -a).
+By default, also stages and commits untracked files (skip with --no-verify).
 
 Options:
     -m, --model MODEL   Specify the LLM model to use (default: deepseek-coder or o1-mini)
                         Examples: gpt-4, claude-3-opus, mistral-7b, ...
     -d, --dry-run       Show changes without committing
-    -n, --no-verify     Skip pre-commit hooks (and pass --no-verify to git commit)
+    -n, --no-verify     Skip pre-commit hooks, skip adding untracked files, and pass --no-verify to git commit
     --author=<author>   Set commit author
     -s, --signoff, --no-signoff
                         Add or remove signoff
@@ -28,38 +34,6 @@ Options:
     -h, --help          Show this help
 EOF
     exit 1
-}
-
-# Default model selection
-select_default_model() {
-    local models
-    models=$(llm models)
-
-    # Check if we got any models
-    if [ -z "$models" ]; then
-        echo "Error: No LLM models found. Please install at least one model." >&2
-        exit 1
-    fi
-
-    # Define preferred models in order of preference
-    local preferred_models=(
-        "claude-3.7-sonnet"
-        "gemini-2.0-flash"
-        "o3-mini"
-        "deepseek-coder"
-        "gpt-4o-mini"
-    )
-
-    # Try each preferred model in order
-    for model in "${preferred_models[@]}"; do
-        if echo "$models" | grep -q "$model"; then
-            echo "$model"
-            return 0
-        fi
-    done
-
-    # If no preferred model is found, use the first available model
-    echo "$models" | head -n 1
 }
 
 # Default values
@@ -135,26 +109,29 @@ if [ "$dry_run" = true ]; then
     git status --short
 fi
 
+# Load additional instructions from config files
+repo_root=$(git rev-parse --show-toplevel)
+additional_instructions=$(load_additional_instructions "$repo_root")
+
+# Combine additional instructions with custom prompt (git-ai-commit doesn't have custom_prompt variable, so just use additional_instructions)
+combined_prompt="$additional_instructions"
+
 # Generate commit message with progress indicator
-echo -e "\n== Commit Message (via ${model}) =="
+model_display=$(resolve_model_display "$model")
+
+echo -e "\n== Commit Message (via ${model_display}) =="
 echo -n "Generating commit message... " >&2
-commit_msg=$(llm \
-  --model "$model" \
-  "Create a commit message for the following changes:
 
-\`\`\`
-$(git diff; git ls-files --others --exclude-standard | xargs -I{} echo \"A  {}\")
-\`\`\`
-
-Format the response as a conventional commit message with a brief title line followed by a more detailed description if needed.
-Don't include any other text in the response, just the commit message.
-")
-printf "\r\033[K" >&2  # Clear progress message
-
-# Strip markdown code fences if present
-if [[ "$commit_msg" =~ ^\`\`\`.* ]] && [[ "$commit_msg" =~ \`\`\`$ ]]; then
-    commit_msg=$(echo "$commit_msg" | sed -e '1s/^```.*//' -e '$s/```$//' | sed '/^$/d')
+# Generate the diff and pipe through the message generator
+if [ "$no_verify" = false ]; then
+    # Include untracked files
+    commit_msg=$({ git diff HEAD; git ls-files --others --exclude-standard | xargs -I{} echo "A  {}"; } | generate_commit_message "$model" "$combined_prompt" "")
+else
+    # Only tracked files
+    commit_msg=$(git diff HEAD | generate_commit_message "$model" "$combined_prompt" "")
 fi
+
+printf "\r\033[K" >&2  # Clear progress message
 
 # Display the message
 echo "$commit_msg"
@@ -174,6 +151,10 @@ if [ "$dry_run" = true ]; then
 else
     # Stage and commit changes
     echo -e "\n== Committing changes... ==" >&2
-    git add -A
+    if [ "$no_verify" = false ]; then
+        git add -A  # Add all changes including untracked files
+    else
+        git add -u  # Only add changes to tracked files
+    fi
     git commit -m "$commit_msg" ${extra_commit_args[@]:-} >/dev/null && echo "Changes committed successfully!"
 fi
