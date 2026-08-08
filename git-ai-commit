@@ -20,10 +20,15 @@ Commits both staged and unstaged changes to tracked files (like git commit -a).
 By default, also stages and commits untracked files (skip with --no-verify).
 
 Options:
-    -m, --model MODEL   Specify the LLM model to use (default: deepseek-coder or o1-mini)
+    -m, --model MODEL   Specify the LLM model to use (default: auto-select)
                         Examples: gpt-4, claude-3-opus, mistral-7b, ...
     -d, --dry-run       Show changes without committing
+    --print-message     Print only the generated message to stdout and exit
+                        (implies --no-decoration; nothing is committed)
+    --no-decoration     Suppress this script's headings; print only results
     -n, --no-verify     Skip pre-commit hooks, skip adding untracked files, and pass --no-verify to git commit
+    --narrate-diff WHEN Control diff narration: auto, always, or never
+                          (default: never)
     --author=<author>   Set commit author
     -s, --signoff, --no-signoff
                         Add or remove signoff
@@ -38,12 +43,16 @@ EOF
 
 # Default values
 model=$(select_default_model)
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
+AI_COMMIT_NARRATE_DIFF="${AI_COMMIT_NARRATE_DIFF:-never}"
+export AI_COMMIT_NARRATE_DIFF
 # Capture original arguments before parsing
 original_args=("$@")
 
 dry_run=false
+print_message=false
+# decorate gates this script's own banners, so callers can ask for bare
+# output without that meaning anything else.
+decorate=true
 no_verify=false
 extra_commit_args=()
 
@@ -58,10 +67,33 @@ while [[ $# -gt 0 ]]; do
             dry_run=true
             shift
             ;;
+        --print-message)
+            # Emit the message alone, for callers that want to seed an
+            # editor or prompt with it. Implies --dry-run: nothing is
+            # committed.
+            print_message=true
+            dry_run=true
+            decorate=false
+            shift
+            ;;
         -n|--no-verify)
             no_verify=true
             extra_commit_args+=("--no-verify")
             shift
+            ;;
+        --no-decoration)
+            decorate=false
+            shift
+            ;;
+        --narrate-diff)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --narrate-diff requires an argument" >&2
+                exit 1
+            fi
+            validate_narration_policy "$2"
+            AI_COMMIT_NARRATE_DIFF="$2"
+            export AI_COMMIT_NARRATE_DIFF
+            shift 2
             ;;
         -l|--list)
             echo "Available models:"
@@ -104,7 +136,7 @@ if [ -z "$(git status --porcelain)" ]; then
     exit 1
 fi
 
-if [ "$dry_run" = true ]; then
+if [ "$dry_run" = true ] && [ "$decorate" = true ]; then
     echo "=== Changes to be committed ==="
     git status --short
 fi
@@ -119,22 +151,26 @@ combined_prompt="$additional_instructions"
 # Generate commit message with progress indicator
 model_display=$(resolve_model_display "$model")
 
-echo -e "\n== Commit Message (via ${model_display}) =="
+[ "$decorate" = true ] && echo -e "\n== Commit Message (via ${model_display}) =="
 echo -n "Generating commit message... " >&2
 
 # Generate the diff and pipe through the message generator
 if [ "$no_verify" = false ]; then
     # Include untracked files
-    commit_msg=$({ git diff HEAD; git ls-files --others --exclude-standard | xargs -I{} echo "A  {}"; } | generate_commit_message "$model" "$combined_prompt" "")
+    commit_msg=$({ git diff HEAD; git ls-files --others --exclude-standard | xargs -I{} echo "A  {}"; } | generate_commit_message "$model" "$combined_prompt" "" "$AI_COMMIT_NARRATE_DIFF")
 else
     # Only tracked files
-    commit_msg=$(git diff HEAD | generate_commit_message "$model" "$combined_prompt" "")
+    commit_msg=$(git diff HEAD | generate_commit_message "$model" "$combined_prompt" "" "$AI_COMMIT_NARRATE_DIFF")
 fi
 
 printf "\r\033[K" >&2  # Clear progress message
 
 # Display the message
 echo "$commit_msg"
+
+if [ "$print_message" = true ]; then
+    exit 0
+fi
 
 if [ "$dry_run" = true ]; then
     # Build suggestion command safely
@@ -156,5 +192,5 @@ else
     else
         git add -u  # Only add changes to tracked files
     fi
-    git commit -m "$commit_msg" ${extra_commit_args[@]:-} >/dev/null && echo "Changes committed successfully!"
+    git commit -m "$commit_msg" "${extra_commit_args[@]}" >/dev/null && echo "Changes committed successfully!"
 fi

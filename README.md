@@ -145,9 +145,19 @@ git-ai-commit -n
 # Use a specific LLM model
 git-ai-commit -m gpt-4
 
+# Preserve the historical unconstrained narration behavior
+git-ai-commit --narrate-diff auto
+
+# Explicitly include concrete files and identifiers in the body
+git-ai-commit --narrate-diff always
+
 # List available models
 git-ai-commit -l
 ```
+
+By default, commit-message bodies omit files, identifiers, and mechanical edits
+that are readily apparent from the diff. `--narrate-diff auto` adds no
+instruction either way, while `--narrate-diff always` requests those details.
 
 ### `git-ai-reword-message`
 Generates a new commit message for a specified commit based on analyzing its changes. Uses LLM to create a descriptive and accurate commit message that reflects the actual changes in the commit.
@@ -167,6 +177,9 @@ git-ai-reword-message --model gpt-4
 
 # Modify the message according to specific instructions
 git-ai-reword-message --prompt "Make the message more concise"
+
+# Include concrete details already visible in the patch
+git-ai-reword-message --narrate-diff always
 ```
 
 ### `git-ai-squash-messages`
