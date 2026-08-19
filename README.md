@@ -130,7 +130,7 @@ Emphasize performance implications of algorithmic changes.
 The `.ai-commit-instructions` file can be version-controlled and shared with your team to ensure consistent commit message style across all contributors.
 
 ### `git-ai-commit`
-Automatically generates and commits changes using AI-generated commit messages. Commits both staged and unstaged changes to tracked files (like `git commit -a`), and by default also stages and commits untracked files.
+Automatically generates and commits changes using AI-generated commit messages. Commits both staged and unstaged changes to tracked files (like `git commit -a`), and by default also stages and commits untracked files. With `--split`, it groups changed files into several themed commits instead of one.
 
 ```bash
 # Generate and commit all changes
@@ -138,6 +138,12 @@ git-ai-commit
 
 # Preview changes without committing (dry run)
 git-ai-commit -d
+
+# Group changes into themed commits
+git-ai-commit --split
+
+# Preview a themed split plan without committing
+git-ai-commit --split -d
 
 # Skip pre-commit hooks and untracked files
 git-ai-commit -n

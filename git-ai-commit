@@ -23,8 +23,9 @@ Options:
     -m, --model MODEL   Specify the LLM model to use (default: auto-select)
                         Examples: gpt-4, claude-3-opus, mistral-7b, ...
     -d, --dry-run       Show changes without committing
-    --print-message     Print only the generated message to stdout and exit
-                        (implies --no-decoration; nothing is committed)
+    --split             Group changed files into one or several commits by theme
+    --print-message     Print only the generated message or split plan to stdout
+                        and exit (implies --no-decoration; nothing is committed)
     --no-decoration     Suppress this script's headings; print only results
     -n, --no-verify     Skip pre-commit hooks, skip adding untracked files, and pass --no-verify to git commit
     --narrate-diff WHEN Control diff narration: auto, always, or never
@@ -41,6 +42,237 @@ EOF
     exit 1
 }
 
+# Parse git status --porcelain output on stdin.
+# $1: include_untracked (true/false)
+# Emits one path per line. Deletions are included because they still need
+# committing. Renames and copies are rejected: their status line names two
+# paths that must reach exactly one commit, and we cannot guarantee the
+# grouping engine keeps them together.
+parse_git_status() {
+    local include_untracked="$1"
+    local line
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        local status="${line:0:2}"
+        local rest="${line:3}"
+        case "$status" in
+            [\?][\?])
+                if [ "$include_untracked" = true ]; then
+                    printf '%s\n' "$rest"
+                fi
+                ;;
+            R?|?R|C?|?C)
+                echo "Error: --split does not support renames or copies: $line" >&2
+                return 1
+                ;;
+            *)
+                # Defensive: any remaining arrow syntax looks like a rename/copy.
+                if [[ "$rest" == *\ -\>\ * ]]; then
+                    echo "Error: --split does not support renames or copies: $line" >&2
+                    return 1
+                fi
+                printf '%s\n' "$rest"
+                ;;
+        esac
+    done
+}
+
+# Print a split plan in human-readable form.
+print_split_plan() {
+    local plan_json="$1"
+    local num_commits
+    num_commits=$(printf '%s' "$plan_json" | jq '.commits | length')
+    if [ "$decorate" = true ]; then
+        echo -e "\n== Split plan =="
+    fi
+    local i
+    for (( i=0; i<num_commits; i++ )); do
+        local msg
+        msg=$(printf '%s' "$plan_json" | jq -r --argjson idx "$i" '.commits[$idx].message')
+        if [ "$decorate" = true ]; then
+            echo ""
+            echo "Commit $((i+1)):"
+        fi
+        echo "$msg"
+        if [ "$decorate" = true ]; then
+            echo "Files:"
+        fi
+        printf '%s' "$plan_json" | jq -r --argjson idx "$i" '.commits[$idx].files[]' | sed 's/^/  /'
+    done
+}
+
+# Print which commits were created and which were not after a failure.
+report_split_failure() {
+    local plan_json="$1"
+    local failed_idx="$2"
+    shift 2
+    local -a created_messages=("$@")
+    local num_commits
+    num_commits=$(printf '%s' "$plan_json" | jq '.commits | length')
+
+    if [ ${#created_messages[@]} -gt 0 ]; then
+        echo "Created commits:" >&2
+        local j
+        for (( j=0; j<${#created_messages[@]}; j++ )); do
+            echo "  $((j+1)). ${created_messages[$j]}" >&2
+        done
+    else
+        echo "No commits were created" >&2
+    fi
+    echo "Not created:" >&2
+    local j
+    for (( j=failed_idx; j<num_commits; j++ )); do
+        local not_msg
+        not_msg=$(printf '%s' "$plan_json" | jq -r --argjson idx "$j" '.commits[$idx].message')
+        echo "  $((j+1)). $not_msg" >&2
+    done
+}
+
+# Apply a split plan by committing each group in order.
+# If a commit fails, report which commits were created and which were not.
+apply_split_plan() {
+    local plan_json="$1"
+    local num_commits
+    num_commits=$(printf '%s' "$plan_json" | jq '.commits | length')
+    local created_messages=()
+    local i
+    for (( i=0; i<num_commits; i++ )); do
+        local msg
+        msg=$(printf '%s' "$plan_json" | jq -r --argjson idx "$i" '.commits[$idx].message')
+        local -a commit_files=()
+        while IFS= read -r f; do
+            commit_files+=("$f")
+        done < <(printf '%s' "$plan_json" | jq -r --argjson idx "$i" '.commits[$idx].files[]')
+
+        if [ "$decorate" = true ]; then
+            echo -e "\n== Creating commit $((i+1)) of ${num_commits} ==" >&2
+        fi
+
+        if ! git add -- ${commit_files[@]+"${commit_files[@]}"}; then
+            echo "Error: Failed to stage files for commit $((i+1)) of ${num_commits}" >&2
+            report_split_failure "$plan_json" "$i" "${created_messages[@]}"
+            return 1
+        fi
+
+        # In split mode the pre-commit hook was run once up front, so suppress
+        # per-commit hooks to avoid re-validating partial commits.
+        local -a commit_args=(${extra_commit_args[@]+"${extra_commit_args[@]}"})
+        local has_no_verify=false
+        local arg
+        for arg in ${commit_args[@]+"${commit_args[@]}"}; do
+            if [ "$arg" = "--no-verify" ]; then
+                has_no_verify=true
+                break
+            fi
+        done
+        if [ "$has_no_verify" = false ]; then
+            commit_args+=("--no-verify")
+        fi
+
+        if ! git commit -m "$msg" ${commit_args[@]+"${commit_args[@]}"} >/dev/null; then
+            echo "Error: Failed to create commit $((i+1)) of ${num_commits}" >&2
+            report_split_failure "$plan_json" "$i" "${created_messages[@]}"
+            return 1
+        fi
+        created_messages+=("$msg")
+    done
+
+    if [ "$decorate" = true ]; then
+        echo -e "\n== Created ${num_commits} commits ==" >&2
+        echo ""
+        git log --oneline -n "$num_commits"
+    fi
+}
+
+# Generate a split plan and either display it or apply it.
+run_split_commit() {
+    # A pre-existing staged index would be swept into the first commit, making
+    # the plan incomplete. Refuse rather than commit something unreviewed.
+    if ! git diff --cached --quiet; then
+        echo "Error: The index already contains staged changes; --split cannot safely commit them" >&2
+        return 1
+    fi
+
+    local status_output
+    status_output=$(git status --porcelain -uall)
+
+    if [ -z "$status_output" ]; then
+        echo "Error: No changes to split" >&2
+        return 1
+    fi
+
+    local include_untracked=true
+    if [ "$no_verify" = true ]; then
+        include_untracked=false
+    fi
+
+    local files_list_text
+    files_list_text=$(printf '%s\n' "$status_output" | parse_git_status "$include_untracked") || return 1
+
+    if [ -z "$files_list_text" ]; then
+        echo "Error: No files to split after parsing status" >&2
+        return 1
+    fi
+
+    local files_from
+    files_from=$(mktemp)
+    printf '%s\n' "$files_list_text" > "$files_from"
+
+    local model_display
+    model_display=$(resolve_model_display "$model")
+
+    if [ "$decorate" = true ]; then
+        echo -e "\n== Generating Split Plan (via ${model_display}) =="
+    fi
+    echo -n "Generating split plan... " >&2
+
+    local diff_output
+    if [ "$no_verify" = false ]; then
+        diff_output=$({ git diff HEAD; git ls-files --others --exclude-standard | xargs -I{} echo "A  {}"; })
+    else
+        diff_output=$(git diff HEAD)
+    fi
+
+    local plan_json
+    if ! plan_json=$(printf '%s' "$diff_output" | generate_split_plan "$model" "$combined_prompt" "$files_from" "$AI_COMMIT_NARRATE_DIFF"); then
+        printf "\r\033[K" >&2
+        rm -f "$files_from"
+        echo "Error: Failed to generate split plan" >&2
+        return 1
+    fi
+    printf "\r\033[K" >&2
+    rm -f "$files_from"
+
+    if [ "$print_message" = true ]; then
+        echo "$plan_json"
+        return 0
+    fi
+
+    print_split_plan "$plan_json"
+
+    if [ "$dry_run" = true ]; then
+        return 0
+    fi
+
+    # Re-derive the file list immediately before the first commit. An editor
+    # autosave or another process may have changed the working copy since the
+    # plan was generated; committing against a stale plan would apply files in
+    # an unreviewed state.
+    local current_status_output
+    current_status_output=$(git status --porcelain -uall)
+    local current_files_list_text
+    current_files_list_text=$(printf '%s\n' "$current_status_output" | parse_git_status "$include_untracked") || return 1
+    local sorted_files sorted_current
+    sorted_files=$(printf '%s\n' "$files_list_text" | sort)
+    sorted_current=$(printf '%s\n' "$current_files_list_text" | sort)
+    if [ "$sorted_files" != "$sorted_current" ]; then
+        echo "Error: Working copy changed since the split plan was generated; aborting to avoid committing unreviewed changes" >&2
+        return 1
+    fi
+
+    apply_split_plan "$plan_json"
+}
+
 # Default values
 model=$(select_default_model)
 AI_COMMIT_NARRATE_DIFF="${AI_COMMIT_NARRATE_DIFF:-never}"
@@ -50,6 +282,7 @@ original_args=("$@")
 
 dry_run=false
 print_message=false
+split=false
 # decorate gates this script's own banners, so callers can ask for bare
 # output without that meaning anything else.
 decorate=true
@@ -65,6 +298,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -d|--dry-run)
             dry_run=true
+            shift
+            ;;
+        --split)
+            split=true
             shift
             ;;
         --print-message)
@@ -148,6 +385,11 @@ additional_instructions=$(load_additional_instructions "$repo_root")
 # Combine additional instructions with custom prompt (git-ai-commit doesn't have custom_prompt variable, so just use additional_instructions)
 combined_prompt="$additional_instructions"
 
+if [ "$split" = true ]; then
+    run_split_commit
+    exit $?
+fi
+
 # Generate commit message with progress indicator
 model_display=$(resolve_model_display "$model")
 
@@ -176,7 +418,7 @@ if [ "$dry_run" = true ]; then
     # Build suggestion command safely
     suggestion="$(basename "$0")"
     filtered_args=()
-    for arg in "${original_args[@]}"; do
+    for arg in ${original_args[@]+"${original_args[@]}"}; do
         [[ "$arg" != "-d" && "$arg" != "--dry-run" ]] && filtered_args+=("$arg")
     done
     if [ ${#filtered_args[@]} -gt 0 ]; then
@@ -192,5 +434,5 @@ else
     else
         git add -u  # Only add changes to tracked files
     fi
-    git commit -m "$commit_msg" "${extra_commit_args[@]}" >/dev/null && echo "Changes committed successfully!"
+    git commit -m "$commit_msg" ${extra_commit_args[@]+"${extra_commit_args[@]}"} >/dev/null && echo "Changes committed successfully!"
 fi
